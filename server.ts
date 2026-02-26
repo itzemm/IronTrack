@@ -32,6 +32,12 @@ db.exec(`
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(exercise_id) REFERENCES schedule(id)
   );
+
+  CREATE TABLE IF NOT EXISTS body_weight (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    weight REAL NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Migration: Add columns if they don't exist
@@ -136,6 +142,18 @@ async function startServer() {
       ORDER BY timestamp DESC
     `).all();
     res.json(rows);
+  });
+
+  // Body Weight Routes
+  app.get("/api/body-weight", (req, res) => {
+    const rows = db.prepare("SELECT * FROM body_weight ORDER BY timestamp DESC").all();
+    res.json(rows);
+  });
+
+  app.post("/api/body-weight", (req, res) => {
+    const { weight } = req.body;
+    const info = db.prepare("INSERT INTO body_weight (weight) VALUES (?)").run(weight);
+    res.json({ id: info.lastInsertRowid });
   });
 
   // Vite middleware for development

@@ -7,13 +7,29 @@ import {
   Plus, 
   CheckCircle2, 
   ChevronRight,
+  ChevronLeft,
   Trash2,
   TrendingUp,
   Clock,
   Sparkles,
-  BarChart3
+  BarChart3,
+  CalendarDays,
+  Scale,
+  CloudCheck
 } from 'lucide-react';
-import { format, startOfWeek, isSameWeek, subDays } from 'date-fns';
+import { 
+  format, 
+  startOfWeek, 
+  isSameWeek, 
+  subDays, 
+  startOfMonth, 
+  endOfMonth, 
+  eachDayOfInterval, 
+  isSameDay, 
+  addMonths, 
+  subMonths, 
+  endOfWeek 
+} from 'date-fns';
 import { 
   LineChart, 
   Line, 
@@ -24,28 +40,34 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
-  Cell
+  Cell,
+  AreaChart,
+  Area
 } from 'recharts';
 import { cn } from './lib/utils';
-import { Exercise, TrainingLog, View } from './types';
+import { Exercise, TrainingLog, View, BodyWeight } from './types';
 import { getWorkoutSuggestions } from './services/geminiService';
 
 export default function App() {
   const [view, setView] = useState<View>('tracker');
   const [schedule, setSchedule] = useState<Exercise[]>([]);
   const [logs, setLogs] = useState<TrainingLog[]>([]);
+  const [bodyWeights, setBodyWeights] = useState<BodyWeight[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     try {
-      const [schedRes, logsRes] = await Promise.all([
+      const [schedRes, logsRes, weightRes] = await Promise.all([
         fetch('/api/schedule'),
-        fetch('/api/logs')
+        fetch('/api/logs'),
+        fetch('/api/body-weight')
       ]);
       const schedData = await schedRes.json();
       const logsData = await logsRes.json();
+      const weightData = await weightRes.json();
       setSchedule(schedData);
       setLogs(logsData);
+      setBodyWeights(weightData);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -80,6 +102,15 @@ export default function App() {
     fetchData();
   };
 
+  const logBodyWeight = async (weight: number) => {
+    await fetch('/api/body-weight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ weight })
+    });
+    fetchData();
+  };
+
   return (
     <div className="min-h-screen bg-zinc-50 flex flex-col">
       {/* Navigation */}
@@ -91,7 +122,12 @@ export default function App() {
           <h1 className="font-bold text-lg tracking-tight">IronTrack</h1>
         </div>
         
-        <div className="flex gap-1 bg-zinc-100 p-1 rounded-xl overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-4">
+          <div className="hidden md:flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
+            <CloudCheck className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wider">Synced to Cloud</span>
+          </div>
+          <div className="flex gap-1 bg-zinc-100 p-1 rounded-xl overflow-x-auto no-scrollbar">
           <NavButton 
             active={view === 'tracker'} 
             onClick={() => setView('tracker')}
@@ -117,13 +153,20 @@ export default function App() {
             label="AI Tips"
           />
           <NavButton 
+            active={view === 'calendar'} 
+            onClick={() => setView('calendar')}
+            icon={<CalendarDays className="w-4 h-4" />}
+            label="Calendar"
+          />
+          <NavButton 
             active={view === 'history'} 
             onClick={() => setView('history')}
             icon={<HistoryIcon className="w-4 h-4" />}
             label="History"
           />
         </div>
-      </nav>
+      </div>
+    </nav>
 
       <main className="flex-1 max-w-4xl w-full mx-auto p-4 md:p-8">
         <AnimatePresence mode="wait">
@@ -152,10 +195,13 @@ export default function App() {
                 <ScheduleView schedule={schedule} onAdd={addExercise} onDelete={deleteExercise} />
               )}
               {view === 'progress' && (
-                <ProgressView logs={logs} />
+                <ProgressView logs={logs} bodyWeights={bodyWeights} onLogWeight={logBodyWeight} />
               )}
               {view === 'suggestions' && (
                 <SuggestionsView logs={logs} schedule={schedule} />
+              )}
+              {view === 'calendar' && (
+                <CalendarView logs={logs} />
               )}
               {view === 'history' && (
                 <HistoryView logs={logs} />
@@ -189,12 +235,27 @@ function TrackerView({ schedule, logs, onLog }: { schedule: Exercise[], logs: Tr
   const currentWeekLogs = logs.filter(log => isSameWeek(new Date(log.timestamp), new Date()));
   
   const days = [1, 2, 3, 4];
+
+  const totalVolume = currentWeekLogs.reduce((acc, log) => acc + (log.weight * log.sets * log.reps), 0);
+  const totalWorkouts = new Set(currentWeekLogs.map(l => format(new Date(l.timestamp), 'yyyy-MM-dd'))).size;
   
   return (
     <div className="space-y-8">
-      <header>
-        <h2 className="text-3xl font-bold tracking-tight">Weekly Tracker</h2>
-        <p className="text-zinc-500 mt-1">Week of {format(startOfWeek(new Date()), 'MMMM do')}</p>
+      <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Weekly Tracker</h2>
+          <p className="text-zinc-500 mt-1">Week of {format(startOfWeek(new Date()), 'MMMM do')}</p>
+        </div>
+        <div className="flex gap-3">
+          <div className="bg-white px-4 py-2 rounded-2xl border border-zinc-200 shadow-sm flex flex-col">
+            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Week Volume</span>
+            <span className="text-lg font-bold">{totalVolume.toLocaleString()}<span className="text-xs font-normal text-zinc-400 ml-1">kg</span></span>
+          </div>
+          <div className="bg-white px-4 py-2 rounded-2xl border border-zinc-200 shadow-sm flex flex-col">
+            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Sessions</span>
+            <span className="text-lg font-bold">{totalWorkouts}</span>
+          </div>
+        </div>
       </header>
 
       <div className="grid gap-6">
@@ -570,9 +631,10 @@ function HistoryView({ logs }: { logs: TrainingLog[] }) {
   );
 }
 
-function ProgressView({ logs }: { logs: TrainingLog[] }) {
+function ProgressView({ logs, bodyWeights, onLogWeight }: { logs: TrainingLog[], bodyWeights: BodyWeight[], onLogWeight: (w: number) => void }) {
   const [volumeData, setVolumeData] = useState<any[]>([]);
   const [pbData, setPbData] = useState<any[]>([]);
+  const [weightInput, setWeightInput] = useState('');
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -586,14 +648,89 @@ function ProgressView({ logs }: { logs: TrainingLog[] }) {
     fetchAnalytics();
   }, []);
 
+  const handleWeightSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const w = parseFloat(weightInput);
+    if (!isNaN(w)) {
+      onLogWeight(w);
+      setWeightInput('');
+    }
+  };
+
   return (
     <div className="space-y-8">
-      <header>
-        <h2 className="text-3xl font-bold tracking-tight">Progress Analytics</h2>
-        <p className="text-zinc-500 mt-1">Visualize your strength and consistency.</p>
+      <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Progress Analytics</h2>
+          <p className="text-zinc-500 mt-1">Visualize your strength and consistency.</p>
+        </div>
+        <form onSubmit={handleWeightSubmit} className="flex items-center gap-2 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
+          <div className="flex items-center gap-2 px-2">
+            <Scale className="w-4 h-4 text-zinc-400" />
+            <input 
+              type="number" 
+              step="0.1"
+              placeholder="Body weight (kg)"
+              value={weightInput}
+              onChange={e => setWeightInput(e.target.value)}
+              className="w-32 text-sm focus:outline-none"
+            />
+          </div>
+          <button 
+            type="submit"
+            className="bg-zinc-900 text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-zinc-800 transition-colors"
+          >
+            Log
+          </button>
+        </form>
       </header>
 
       <div className="grid gap-6">
+        {bodyWeights.length > 0 && (
+          <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
+            <h3 className="font-semibold mb-6 flex items-center gap-2">
+              <Scale className="w-4 h-4" /> Body Weight Trend
+            </h3>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={[...bodyWeights].reverse()}>
+                  <defs>
+                    <linearGradient id="colorWeight" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#18181b" stopOpacity={0.1}/>
+                      <stop offset="95%" stopColor="#18181b" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                  <XAxis 
+                    dataKey="timestamp" 
+                    tick={{ fontSize: 10, fill: '#888' }} 
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(val) => format(new Date(val), 'MMM d')}
+                  />
+                  <YAxis 
+                    domain={['dataMin - 2', 'dataMax + 2']}
+                    tick={{ fontSize: 10, fill: '#888' }} 
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e5e5e5' }}
+                    labelFormatter={(val) => format(new Date(val), 'MMMM do, yyyy')}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="weight" 
+                    stroke="#18181b" 
+                    fillOpacity={1} 
+                    fill="url(#colorWeight)" 
+                    strokeWidth={2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
         <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
           <h3 className="font-semibold mb-6 flex items-center gap-2">
             <TrendingUp className="w-4 h-4" /> Total Volume (Weight × Sets × Reps)
@@ -736,6 +873,149 @@ function SuggestionsView({ logs, schedule }: { logs: TrainingLog[], schedule: Ex
             No suggestions available yet. Keep logging your workouts!
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function CalendarView({ logs }: { logs: TrainingLog[] }) {
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+
+  const monthStart = startOfMonth(currentMonth);
+  const monthEnd = endOfMonth(monthStart);
+  const startDate = startOfWeek(monthStart);
+  const endDate = endOfWeek(monthEnd);
+
+  const calendarDays = eachDayOfInterval({
+    start: startDate,
+    end: endDate,
+  });
+
+  const nextMonth = () => setCurrentMonth(addMonths(currentMonth, 1));
+  const prevMonth = () => setCurrentMonth(subMonths(currentMonth, 1));
+
+  // Group logs by date for easy lookup
+  const logsByDate = logs.reduce((acc, log) => {
+    const dateKey = format(new Date(log.timestamp), 'yyyy-MM-dd');
+    if (!acc[dateKey]) acc[dateKey] = [];
+    acc[dateKey].push(log);
+    return acc;
+  }, {} as Record<string, TrainingLog[]>);
+
+  return (
+    <div className="space-y-8">
+      <header className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Gym Calendar</h2>
+          <p className="text-zinc-500 mt-1">Track your consistency over time.</p>
+        </div>
+        <div className="flex items-center gap-2 bg-white p-1 rounded-xl border border-zinc-200 shadow-sm">
+          <button 
+            onClick={prevMonth}
+            className="p-2 hover:bg-zinc-50 rounded-lg transition-colors"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <span className="text-sm font-bold min-w-[120px] text-center">
+            {format(currentMonth, 'MMMM yyyy')}
+          </span>
+          <button 
+            onClick={nextMonth}
+            className="p-2 hover:bg-zinc-50 rounded-lg transition-colors"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        </div>
+      </header>
+
+      <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+        <div className="grid grid-cols-7 border-b border-zinc-100 bg-zinc-50/50">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+            <div key={day} className="py-3 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+              {day}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7">
+          {calendarDays.map((day, i) => {
+            const dateKey = format(day, 'yyyy-MM-dd');
+            const dayLogs = logsByDate[dateKey] || [];
+            const isCurrentMonth = isSameDay(startOfMonth(day), monthStart);
+            const isToday = isSameDay(day, new Date());
+            
+            // Get unique day numbers performed on this date
+            const performedDays = Array.from(new Set(dayLogs.map(l => l.day_number).filter(d => d !== null)));
+
+            return (
+              <div 
+                key={dateKey} 
+                className={cn(
+                  "min-h-[100px] p-2 border-r border-b border-zinc-50 last:border-r-0 transition-colors",
+                  !isCurrentMonth && "bg-zinc-50/30 opacity-40",
+                  isToday && "bg-zinc-900/[0.02]"
+                )}
+              >
+                <div className="flex justify-between items-start">
+                  <span className={cn(
+                    "text-xs font-medium w-6 h-6 flex items-center justify-center rounded-full",
+                    isToday ? "bg-zinc-900 text-white" : "text-zinc-500"
+                  )}>
+                    {format(day, 'd')}
+                  </span>
+                </div>
+                
+                <div className="mt-2 space-y-1">
+                  {performedDays.map(dayNum => (
+                    <div 
+                      key={dayNum}
+                      className="text-[9px] font-bold bg-zinc-900 text-white px-1.5 py-0.5 rounded flex items-center justify-between"
+                    >
+                      <span>Day {dayNum}</span>
+                      <Dumbbell className="w-2 h-2" />
+                    </div>
+                  ))}
+                  {dayLogs.length > 0 && performedDays.length === 0 && (
+                    <div className="text-[9px] font-bold bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded">
+                      Logged
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-zinc-900 text-white p-6 rounded-2xl shadow-lg">
+          <p className="text-zinc-400 text-xs font-bold uppercase tracking-widest mb-1">Monthly Sessions</p>
+          <p className="text-4xl font-bold">
+            {Object.keys(logsByDate).filter(date => {
+              const d = new Date(date);
+              return d >= monthStart && d <= monthEnd;
+            }).length}
+          </p>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
+          <p className="text-zinc-400 text-xs font-bold uppercase tracking-widest mb-1">Most Active Day</p>
+          <p className="text-2xl font-bold">
+            {(() => {
+              const dayCounts: Record<number, number> = {};
+              logs.forEach(l => {
+                if (l.day_number) dayCounts[l.day_number] = (dayCounts[l.day_number] || 0) + 1;
+              });
+              const topDay = Object.entries(dayCounts).sort((a, b) => b[1] - a[1])[0];
+              return topDay ? `Day ${topDay[0]}` : 'N/A';
+            })()}
+          </p>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
+          <p className="text-zinc-400 text-xs font-bold uppercase tracking-widest mb-1">Consistency</p>
+          <p className="text-2xl font-bold">
+            {Math.round((Object.keys(logsByDate).length / 30) * 100)}%
+            <span className="text-xs font-normal text-zinc-400 ml-2">all time</span>
+          </p>
+        </div>
       </div>
     </div>
   );

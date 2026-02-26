@@ -21,4 +21,10 @@ export interface TrainingLog {
   timestamp: string;
 }
 
-export type View = 'tracker' | 'schedule' | 'history' | 'progress' | 'suggestions';
+export interface BodyWeight {
+  id: number;
+  weight: number;
+  timestamp: string;
+}
+
+export type View = 'tracker' | 'schedule' | 'history' | 'progress' | 'suggestions' | 'calendar';
