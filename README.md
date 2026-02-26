@@ -1,20 +1,33 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# IronTrack Weekly - Netlify Deployment Guide
 
-# Run and deploy your AI Studio app
+This app is a pure front-end React application built with Vite and Tailwind CSS. It uses `localStorage` for data persistence, making it perfect for static hosting on Netlify.
 
-This contains everything you need to run your app locally.
+## 🚀 One-Click Deployment
 
-View your app in AI Studio: https://ai.studio/apps/c727f2bb-02ac-4bd8-bea8-1acbccd4a62d
+1. **Push your code to GitHub/GitLab/Bitbucket.**
+2. **Connect to Netlify**:
+   - Log in to [Netlify](https://app.netlify.com/).
+   - Click **"Add new site"** > **"Import an existing project"**.
+   - Select your repository.
+3. **Configure Build Settings**:
+   - **Build Command**: `npm run build`
+   - **Publish Directory**: `dist`
+   - (These are already configured in `netlify.toml`)
+4. **Set Environment Variables**:
+   - Go to **Site settings > Build & deploy > Environment variables**.
+   - Add `GEMINI_API_KEY`: Your Google Gemini API key (required for AI Tips).
+5. **Deploy!**
 
-## Run Locally
+## 🛠 Local Development
 
-**Prerequisites:**  Node.js
+```bash
+npm install
+npm run dev
+```
 
+## 📦 Build for Production
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+npm run build
+```
+The output will be in the `dist/` folder.
