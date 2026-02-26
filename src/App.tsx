@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Dumbbell, 
@@ -55,21 +55,17 @@ export default function App() {
   const [bodyWeights, setBodyWeights] = useState<BodyWeight[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = async () => {
+  const fetchData = () => {
     try {
-      const [schedRes, logsRes, weightRes] = await Promise.all([
-        fetch('/api/schedule'),
-        fetch('/api/logs'),
-        fetch('/api/body-weight')
-      ]);
-      const schedData = await schedRes.json();
-      const logsData = await logsRes.json();
-      const weightData = await weightRes.json();
-      setSchedule(schedData);
-      setLogs(logsData);
-      setBodyWeights(weightData);
+      const savedSchedule = localStorage.getItem('ironTrack_schedule');
+      const savedLogs = localStorage.getItem('ironTrack_logs');
+      const savedWeights = localStorage.getItem('ironTrack_bodyWeights');
+
+      if (savedSchedule) setSchedule(JSON.parse(savedSchedule));
+      if (savedLogs) setLogs(JSON.parse(savedLogs));
+      if (savedWeights) setBodyWeights(JSON.parse(savedWeights));
     } catch (error) {
-      console.error('Failed to fetch data:', error);
+      console.error('Failed to fetch local data:', error);
     } finally {
       setLoading(false);
     }
@@ -79,36 +75,39 @@ export default function App() {
     fetchData();
   }, []);
 
-  const addExercise = async (exercise: Omit<Exercise, 'id'>) => {
-    await fetch('/api/schedule', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(exercise)
-    });
-    fetchData();
+  const addExercise = (exercise: Omit<Exercise, 'id'>) => {
+    const newExercise = { ...exercise, id: Date.now() };
+    const updatedSchedule = [...schedule, newExercise];
+    setSchedule(updatedSchedule);
+    localStorage.setItem('ironTrack_schedule', JSON.stringify(updatedSchedule));
   };
 
-  const deleteExercise = async (id: number) => {
-    await fetch(`/api/schedule/${id}`, { method: 'DELETE' });
-    fetchData();
+  const deleteExercise = (id: number) => {
+    const updatedSchedule = schedule.filter(e => e.id !== id);
+    setSchedule(updatedSchedule);
+    localStorage.setItem('ironTrack_schedule', JSON.stringify(updatedSchedule));
   };
 
-  const logWorkout = async (log: Omit<TrainingLog, 'id' | 'timestamp'>) => {
-    await fetch('/api/logs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(log)
-    });
-    fetchData();
+  const logWorkout = (log: Omit<TrainingLog, 'id' | 'timestamp'>) => {
+    const newLog = { 
+      ...log, 
+      id: Date.now(), 
+      timestamp: new Date().toISOString() 
+    };
+    const updatedLogs = [newLog, ...logs];
+    setLogs(updatedLogs);
+    localStorage.setItem('ironTrack_logs', JSON.stringify(updatedLogs));
   };
 
-  const logBodyWeight = async (weight: number) => {
-    await fetch('/api/body-weight', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ weight })
-    });
-    fetchData();
+  const logBodyWeight = (weight: number) => {
+    const newWeight = { 
+      id: Date.now(), 
+      weight, 
+      timestamp: new Date().toISOString() 
+    };
+    const updatedWeights = [newWeight, ...bodyWeights];
+    setBodyWeights(updatedWeights);
+    localStorage.setItem('ironTrack_bodyWeights', JSON.stringify(updatedWeights));
   };
 
   return (
@@ -125,7 +124,7 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="hidden md:flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
             <CloudCheck className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-wider">Synced to Cloud</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider">Local Storage Active</span>
           </div>
           <div className="flex gap-1 bg-zinc-100 p-1 rounded-xl overflow-x-auto no-scrollbar">
           <NavButton 
@@ -632,21 +631,34 @@ function HistoryView({ logs }: { logs: TrainingLog[] }) {
 }
 
 function ProgressView({ logs, bodyWeights, onLogWeight }: { logs: TrainingLog[], bodyWeights: BodyWeight[], onLogWeight: (w: number) => void }) {
-  const [volumeData, setVolumeData] = useState<any[]>([]);
-  const [pbData, setPbData] = useState<any[]>([]);
   const [weightInput, setWeightInput] = useState('');
 
-  useEffect(() => {
-    const fetchAnalytics = async () => {
-      const [volRes, pbRes] = await Promise.all([
-        fetch('/api/analytics/volume'),
-        fetch('/api/analytics/pbs')
-      ]);
-      setVolumeData(await volRes.json());
-      setPbData(await pbRes.json());
-    };
-    fetchAnalytics();
-  }, []);
+  // Calculate volume data locally
+  const volumeData = useMemo(() => {
+    const dailyVolume: Record<string, number> = {};
+    logs.forEach(log => {
+      const date = format(new Date(log.timestamp), 'yyyy-MM-dd');
+      const vol = log.weight * log.sets * log.reps;
+      dailyVolume[date] = (dailyVolume[date] || 0) + vol;
+    });
+    return Object.entries(dailyVolume)
+      .map(([date, volume]) => ({ date, volume }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-14); // Last 14 days
+  }, [logs]);
+
+  // Calculate PB data locally
+  const pbData = useMemo(() => {
+    const pbs: Record<string, number> = {};
+    logs.forEach(log => {
+      if (!pbs[log.exercise_name] || log.weight > pbs[log.exercise_name]) {
+        pbs[log.exercise_name] = log.weight;
+      }
+    });
+    return Object.entries(pbs)
+      .map(([exercise_name, max_weight]) => ({ exercise_name, max_weight }))
+      .sort((a, b) => b.max_weight - a.max_weight);
+  }, [logs]);
 
   const handleWeightSubmit = (e: React.FormEvent) => {
     e.preventDefault();
