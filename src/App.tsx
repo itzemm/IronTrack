@@ -32,6 +32,16 @@ import {
   endOfWeek 
 } from 'date-fns';
 import { 
+  collection, 
+  doc, 
+  setDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  orderBy,
+  Timestamp
+} from 'firebase/firestore';
+import { 
   LineChart, 
   Line, 
   XAxis, 
@@ -48,7 +58,7 @@ import {
 import { cn } from './lib/utils';
 import { Exercise, TrainingLog, View, BodyWeight } from './types';
 import { getWorkoutSuggestions } from './services/geminiService';
-import { auth } from './lib/firebase';
+import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { Auth } from './components/Auth';
 import { LogOut } from 'lucide-react';
@@ -62,32 +72,52 @@ export default function App() {
   const [bodyWeights, setBodyWeights] = useState<BodyWeight[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = () => {
-    try {
-      const savedSchedule = localStorage.getItem('ironTrack_schedule');
-      const savedLogs = localStorage.getItem('ironTrack_logs');
-      const savedWeights = localStorage.getItem('ironTrack_bodyWeights');
-
-      if (savedSchedule) setSchedule(JSON.parse(savedSchedule));
-      if (savedLogs) setLogs(JSON.parse(savedLogs));
-      if (savedWeights) setBodyWeights(JSON.parse(savedWeights));
-    } catch (error) {
-      console.error('Failed to fetch local data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       setUser(user);
       setAuthLoading(false);
-      if (user) {
-        fetchData();
-      }
     });
-    return () => unsubscribe();
+    return () => unsubscribeAuth();
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setSchedule([]);
+      setLogs([]);
+      setBodyWeights([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+
+    // Real-time listeners for Firestore
+    const scheduleRef = collection(db, 'users', user.uid, 'schedule');
+    const logsRef = collection(db, 'users', user.uid, 'logs');
+    const weightsRef = collection(db, 'users', user.uid, 'bodyWeights');
+
+    const unsubSchedule = onSnapshot(scheduleRef, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: Number(doc.id) } as Exercise));
+      setSchedule(data);
+      setLoading(false);
+    });
+
+    const unsubLogs = onSnapshot(query(logsRef, orderBy('timestamp', 'desc')), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: Number(doc.id) } as TrainingLog));
+      setLogs(data);
+    });
+
+    const unsubWeights = onSnapshot(query(weightsRef, orderBy('timestamp', 'desc')), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: Number(doc.id) } as BodyWeight));
+      setBodyWeights(data);
+    });
+
+    return () => {
+      unsubSchedule();
+      unsubLogs();
+      unsubWeights();
+    };
+  }, [user]);
 
   const handleLogout = async () => {
     try {
@@ -109,82 +139,74 @@ export default function App() {
     return <Auth onSuccess={() => {}} />;
   }
 
-  const addExercise = (exercise: Omit<Exercise, 'id'>) => {
-    const newExercise = { ...exercise, id: Date.now() };
-    const updatedSchedule = [...schedule, newExercise];
-    setSchedule(updatedSchedule);
-    localStorage.setItem('ironTrack_schedule', JSON.stringify(updatedSchedule));
+  const addExercise = async (exercise: Omit<Exercise, 'id'>) => {
+    if (!user) return;
+    const id = Date.now();
+    const newExercise = { ...exercise, id };
+    await setDoc(doc(db, 'users', user.uid, 'schedule', id.toString()), newExercise);
   };
 
-  const updateExercise = (exercise: Exercise) => {
-    const updatedSchedule = schedule.map(e => e.id === exercise.id ? exercise : e);
-    setSchedule(updatedSchedule);
-    localStorage.setItem('ironTrack_schedule', JSON.stringify(updatedSchedule));
+  const updateExercise = async (exercise: Exercise) => {
+    if (!user) return;
+    await setDoc(doc(db, 'users', user.uid, 'schedule', exercise.id.toString()), exercise);
   };
 
-  const deleteExercise = (id: number) => {
-    const updatedSchedule = schedule.filter(e => e.id !== id);
-    setSchedule(updatedSchedule);
-    localStorage.setItem('ironTrack_schedule', JSON.stringify(updatedSchedule));
+  const deleteExercise = async (id: number) => {
+    if (!user) return;
+    await deleteDoc(doc(db, 'users', user.uid, 'schedule', id.toString()));
   };
 
-  const logWorkout = (log: Omit<TrainingLog, 'id' | 'timestamp'>) => {
+  const logWorkout = async (log: Omit<TrainingLog, 'id' | 'timestamp'>) => {
+    if (!user) return;
+    const id = Date.now();
     const newLog = { 
       ...log, 
-      id: Date.now(), 
+      id, 
       timestamp: new Date().toISOString() 
     };
-    setLogs(prevLogs => {
-      const updatedLogs = [newLog, ...prevLogs];
-      localStorage.setItem('ironTrack_logs', JSON.stringify(updatedLogs));
-      return updatedLogs;
-    });
+    await setDoc(doc(db, 'users', user.uid, 'logs', id.toString()), newLog);
   };
 
-  const updateLog = (log: TrainingLog) => {
-    setLogs(prevLogs => {
-      const updatedLogs = prevLogs.map(l => l.id === log.id ? log : l);
-      localStorage.setItem('ironTrack_logs', JSON.stringify(updatedLogs));
-      return updatedLogs;
-    });
+  const updateLog = async (log: TrainingLog) => {
+    if (!user) return;
+    await setDoc(doc(db, 'users', user.uid, 'logs', log.id.toString()), log);
   };
 
-  const deleteLog = (id: number) => {
-    setLogs(prevLogs => {
-      const updatedLogs = prevLogs.filter(l => l.id !== id);
-      localStorage.setItem('ironTrack_logs', JSON.stringify(updatedLogs));
-      return updatedLogs;
-    });
+  const deleteLog = async (id: number) => {
+    if (!user) return;
+    await deleteDoc(doc(db, 'users', user.uid, 'logs', id.toString()));
   };
 
-  const logBodyWeight = (weight: number) => {
+  const logBodyWeight = async (weight: number) => {
+    if (!user) return;
+    const id = Date.now();
     const newWeight = { 
-      id: Date.now(), 
+      id, 
       weight, 
       timestamp: new Date().toISOString() 
     };
-    const updatedWeights = [newWeight, ...bodyWeights];
-    setBodyWeights(updatedWeights);
-    localStorage.setItem('ironTrack_bodyWeights', JSON.stringify(updatedWeights));
+    await setDoc(doc(db, 'users', user.uid, 'bodyWeights', id.toString()), newWeight);
   };
 
   return (
     <div className="min-h-screen bg-zinc-50 flex flex-col">
       {/* Navigation */}
-      <nav className="sticky top-0 z-50 glass px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <nav className="sticky top-0 z-50 glass px-4 py-3 flex items-center gap-4">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <div className="bg-zinc-900 p-2 rounded-lg">
             <Dumbbell className="w-5 h-5 text-white" />
           </div>
-          <h1 className="font-bold text-lg tracking-tight">IronTrack</h1>
+          <h1 className="font-bold text-lg tracking-tight hidden xs:block">IronTrack</h1>
         </div>
         
-        <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
+        <div className="flex-1 min-w-0 flex items-center justify-end gap-2 sm:gap-4">
+          <div className="hidden md:flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100 flex-shrink-0">
             <CloudCheck className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-wider">Local Storage Active</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider">Cloud Sync Active</span>
           </div>
-          <div className="flex gap-1 bg-zinc-100 p-1 rounded-xl overflow-x-auto no-scrollbar">
+          
+          <div className="relative max-w-full overflow-hidden">
+            <div className="flex gap-1 bg-zinc-100 p-1 rounded-xl overflow-x-auto no-scrollbar scroll-smooth scroll-fade">
           <NavButton 
             active={view === 'tracker'} 
             onClick={() => setView('tracker')}
@@ -221,17 +243,19 @@ export default function App() {
             icon={<HistoryIcon className="w-4 h-4" />}
             label="History"
           />
+            </div>
+          </div>
+
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all text-zinc-500 hover:text-red-600 hover:bg-red-50"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all text-zinc-500 hover:text-red-600 hover:bg-red-50 flex-shrink-0"
             title="Sign Out"
           >
             <LogOut className="w-4 h-4" />
-            <span className="hidden sm:inline">Sign Out</span>
+            <span className="hidden lg:inline">Sign Out</span>
           </button>
         </div>
-      </div>
-    </nav>
+      </nav>
 
       <main className="flex-1 max-w-4xl w-full mx-auto p-4 md:p-8">
         <AnimatePresence mode="wait">
@@ -284,7 +308,7 @@ function NavButton({ active, onClick, icon, label }: { active: boolean, onClick:
     <button
       onClick={onClick}
       className={cn(
-        "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all",
+        "flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap",
         active ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-900 hover:bg-white/50"
       )}
     >
