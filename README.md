@@ -16,6 +16,12 @@ This app is a pure front-end React application built with Vite and Tailwind CSS.
 4. **Set Environment Variables**:
    - Go to **Site settings > Build & deploy > Environment variables**.
    - Add `GEMINI_API_KEY`: Your Google Gemini API key (required for AI Tips).
+   - Add `VITE_FIREBASE_API_KEY`: Your Firebase API Key.
+   - Add `VITE_FIREBASE_AUTH_DOMAIN`: Your Firebase Auth Domain.
+   - Add `VITE_FIREBASE_PROJECT_ID`: Your Firebase Project ID.
+   - Add `VITE_FIREBASE_STORAGE_BUCKET`: Your Firebase Storage Bucket.
+   - Add `VITE_FIREBASE_MESSAGING_SENDER_ID`: Your Firebase Messaging Sender ID.
+   - Add `VITE_FIREBASE_APP_ID`: Your Firebase App ID.
 5. **Deploy!**
 
 ## 🛠 Local Development

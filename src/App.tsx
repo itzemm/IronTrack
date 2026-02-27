@@ -15,7 +15,8 @@ import {
   BarChart3,
   CalendarDays,
   Scale,
-  CloudCheck
+  CloudCheck,
+  Pencil
 } from 'lucide-react';
 import { 
   format, 
@@ -47,8 +48,14 @@ import {
 import { cn } from './lib/utils';
 import { Exercise, TrainingLog, View, BodyWeight } from './types';
 import { getWorkoutSuggestions } from './services/geminiService';
+import { auth } from './lib/firebase';
+import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import { Auth } from './components/Auth';
+import { LogOut } from 'lucide-react';
 
 export default function App() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [view, setView] = useState<View>('tracker');
   const [schedule, setSchedule] = useState<Exercise[]>([]);
   const [logs, setLogs] = useState<TrainingLog[]>([]);
@@ -72,12 +79,45 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchData();
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setAuthLoading(false);
+      if (user) {
+        fetchData();
+      }
+    });
+    return () => unsubscribe();
   }, []);
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+  };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Auth onSuccess={() => {}} />;
+  }
 
   const addExercise = (exercise: Omit<Exercise, 'id'>) => {
     const newExercise = { ...exercise, id: Date.now() };
     const updatedSchedule = [...schedule, newExercise];
+    setSchedule(updatedSchedule);
+    localStorage.setItem('ironTrack_schedule', JSON.stringify(updatedSchedule));
+  };
+
+  const updateExercise = (exercise: Exercise) => {
+    const updatedSchedule = schedule.map(e => e.id === exercise.id ? exercise : e);
     setSchedule(updatedSchedule);
     localStorage.setItem('ironTrack_schedule', JSON.stringify(updatedSchedule));
   };
@@ -94,9 +134,27 @@ export default function App() {
       id: Date.now(), 
       timestamp: new Date().toISOString() 
     };
-    const updatedLogs = [newLog, ...logs];
-    setLogs(updatedLogs);
-    localStorage.setItem('ironTrack_logs', JSON.stringify(updatedLogs));
+    setLogs(prevLogs => {
+      const updatedLogs = [newLog, ...prevLogs];
+      localStorage.setItem('ironTrack_logs', JSON.stringify(updatedLogs));
+      return updatedLogs;
+    });
+  };
+
+  const updateLog = (log: TrainingLog) => {
+    setLogs(prevLogs => {
+      const updatedLogs = prevLogs.map(l => l.id === log.id ? log : l);
+      localStorage.setItem('ironTrack_logs', JSON.stringify(updatedLogs));
+      return updatedLogs;
+    });
+  };
+
+  const deleteLog = (id: number) => {
+    setLogs(prevLogs => {
+      const updatedLogs = prevLogs.filter(l => l.id !== id);
+      localStorage.setItem('ironTrack_logs', JSON.stringify(updatedLogs));
+      return updatedLogs;
+    });
   };
 
   const logBodyWeight = (weight: number) => {
@@ -163,6 +221,14 @@ export default function App() {
             icon={<HistoryIcon className="w-4 h-4" />}
             label="History"
           />
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all text-zinc-500 hover:text-red-600 hover:bg-red-50"
+            title="Sign Out"
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="hidden sm:inline">Sign Out</span>
+          </button>
         </div>
       </div>
     </nav>
@@ -188,10 +254,10 @@ export default function App() {
               transition={{ duration: 0.2 }}
             >
               {view === 'tracker' && (
-                <TrackerView schedule={schedule} logs={logs} onLog={logWorkout} />
+                <TrackerView schedule={schedule} logs={logs} onLog={logWorkout} onUpdateLog={updateLog} />
               )}
               {view === 'schedule' && (
-                <ScheduleView schedule={schedule} onAdd={addExercise} onDelete={deleteExercise} />
+                <ScheduleView schedule={schedule} onAdd={addExercise} onUpdate={updateExercise} onDelete={deleteExercise} />
               )}
               {view === 'progress' && (
                 <ProgressView logs={logs} bodyWeights={bodyWeights} onLogWeight={logBodyWeight} />
@@ -203,7 +269,7 @@ export default function App() {
                 <CalendarView logs={logs} />
               )}
               {view === 'history' && (
-                <HistoryView logs={logs} />
+                <HistoryView logs={logs} onUpdateLog={updateLog} onDeleteLog={deleteLog} />
               )}
             </motion.div>
           )}
@@ -230,8 +296,8 @@ function NavButton({ active, onClick, icon, label }: { active: boolean, onClick:
 
 // --- View Components ---
 
-function TrackerView({ schedule, logs, onLog }: { schedule: Exercise[], logs: TrainingLog[], onLog: (log: any) => void }) {
-  const currentWeekLogs = logs.filter(log => isSameWeek(new Date(log.timestamp), new Date()));
+function TrackerView({ schedule, logs, onLog, onUpdateLog }: { schedule: Exercise[], logs: TrainingLog[], onLog: (log: any) => void, onUpdateLog: (log: TrainingLog) => void }) {
+  const currentWeekLogs = logs.filter(log => isSameWeek(new Date(log.timestamp), new Date(), { weekStartsOn: 1 }));
   
   const days = [1, 2, 3, 4];
 
@@ -243,7 +309,7 @@ function TrackerView({ schedule, logs, onLog }: { schedule: Exercise[], logs: Tr
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Weekly Tracker</h2>
-          <p className="text-zinc-500 mt-1">Week of {format(startOfWeek(new Date()), 'MMMM do')}</p>
+          <p className="text-zinc-500 mt-1">Week of {format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'MMMM do')}</p>
         </div>
         <div className="flex gap-3">
           <div className="bg-white px-4 py-2 rounded-2xl border border-zinc-200 shadow-sm flex flex-col">
@@ -282,13 +348,14 @@ function TrackerView({ schedule, logs, onLog }: { schedule: Exercise[], logs: Tr
               ) : (
                 <div className="grid gap-3">
                   {dayExercises.map(exercise => {
-                    const isDone = currentWeekLogs.some(log => log.exercise_id === exercise.id);
+                    const currentLog = currentWeekLogs.find(log => log.exercise_id === exercise.id);
                     return (
                       <ExerciseCard 
                         key={exercise.id} 
                         exercise={exercise} 
-                        isDone={isDone} 
+                        currentLog={currentLog} 
                         onLog={onLog} 
+                        onUpdateLog={onUpdateLog}
                       />
                     );
                   })}
@@ -302,16 +369,27 @@ function TrackerView({ schedule, logs, onLog }: { schedule: Exercise[], logs: Tr
   );
 }
 
-function ExerciseCard({ exercise, isDone, onLog }: { exercise: Exercise, isDone: boolean, onLog: (log: any) => void, key?: any }) {
+function ExerciseCard({ exercise, currentLog, onLog, onUpdateLog }: { exercise: Exercise, currentLog?: TrainingLog, onLog: (log: any) => void, onUpdateLog: (log: TrainingLog) => void, key?: any }) {
   const [isLogging, setIsLogging] = useState(false);
-  const [weight, setWeight] = useState('');
-  const [sets, setSets] = useState(exercise.target_sets.toString());
-  const [reps, setReps] = useState('');
-  const [notes, setNotes] = useState('');
+  const [weight, setWeight] = useState(currentLog ? currentLog.weight.toString() : '');
+  const [sets, setSets] = useState(currentLog ? currentLog.sets.toString() : exercise.target_sets.toString());
+  const [reps, setReps] = useState(currentLog ? currentLog.reps.toString() : '');
+  const [notes, setNotes] = useState(currentLog ? currentLog.notes || '' : '');
+
+  const isDone = !!currentLog;
+
+  useEffect(() => {
+    if (currentLog) {
+      setWeight(currentLog.weight.toString());
+      setSets(currentLog.sets.toString());
+      setReps(currentLog.reps.toString());
+      setNotes(currentLog.notes || '');
+    }
+  }, [currentLog]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onLog({
+    const logData = {
       exercise_id: exercise.id,
       exercise_name: exercise.exercise_name,
       muscle_group: exercise.muscle_group,
@@ -320,15 +398,31 @@ function ExerciseCard({ exercise, isDone, onLog }: { exercise: Exercise, isDone:
       sets: parseInt(sets) || 0,
       reps: parseInt(reps) || 0,
       notes: notes
-    });
+    };
+
+    if (currentLog) {
+      onUpdateLog({ ...currentLog, ...logData });
+    } else {
+      onLog(logData);
+    }
     setIsLogging(false);
   };
 
   return (
     <div className={cn(
-      "p-4 rounded-2xl border transition-all",
+      "p-4 rounded-2xl border transition-all relative group",
       isDone ? "bg-emerald-50/50 border-emerald-100" : "bg-white border-zinc-200 hover:border-zinc-300"
     )}>
+      {isDone && !isLogging && (
+        <button 
+          onClick={() => setIsLogging(true)}
+          className="absolute top-3 right-3 p-1.5 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+          title="Edit Log"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+      )}
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           {isDone ? (
@@ -423,8 +517,9 @@ function ExerciseCard({ exercise, isDone, onLog }: { exercise: Exercise, isDone:
   );
 }
 
-function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onAdd: (e: any) => void, onDelete: (id: number) => void }) {
-  const [newExercise, setNewExercise] = useState({
+function ScheduleView({ schedule, onAdd, onUpdate, onDelete }: { schedule: Exercise[], onAdd: (e: any) => void, onUpdate: (e: Exercise) => void, onDelete: (id: number) => void }) {
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [formData, setFormData] = useState({
     day_number: 1,
     exercise_name: '',
     muscle_group: 'Chest',
@@ -437,9 +532,34 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newExercise.exercise_name) return;
-    onAdd(newExercise);
-    setNewExercise({ ...newExercise, exercise_name: '', notes: '' });
+    if (!formData.exercise_name) return;
+    
+    if (editingId) {
+      onUpdate({ ...formData, id: editingId } as Exercise);
+      setEditingId(null);
+    } else {
+      onAdd(formData);
+    }
+    
+    setFormData({ ...formData, exercise_name: '', notes: '' });
+  };
+
+  const handleEdit = (exercise: Exercise) => {
+    setEditingId(exercise.id);
+    setFormData({
+      day_number: exercise.day_number,
+      exercise_name: exercise.exercise_name,
+      muscle_group: exercise.muscle_group,
+      target_sets: exercise.target_sets,
+      target_reps: exercise.target_reps,
+      notes: exercise.notes || ''
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleCancel = () => {
+    setEditingId(null);
+    setFormData({ ...formData, exercise_name: '', notes: '' });
   };
 
   return (
@@ -449,16 +569,20 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
         <p className="text-zinc-500 mt-1">Define your 4-day workout plan.</p>
       </header>
 
-      <form onSubmit={handleSubmit} className="bg-white p-6 rounded-2xl border border-zinc-200 space-y-4 shadow-sm">
+      <form onSubmit={handleSubmit} className={cn(
+        "bg-white p-6 rounded-2xl border space-y-4 shadow-sm transition-all",
+        editingId ? "border-zinc-900 ring-1 ring-zinc-900" : "border-zinc-200"
+      )}>
         <h3 className="font-semibold flex items-center gap-2">
-          <Plus className="w-4 h-4" /> Add New Exercise
+          {editingId ? <Pencil className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+          {editingId ? 'Edit Exercise' : 'Add New Exercise'}
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
           <div className="space-y-1">
             <label className="text-xs font-medium text-zinc-500">Day</label>
             <select 
-              value={newExercise.day_number}
-              onChange={e => setNewExercise({ ...newExercise, day_number: parseInt(e.target.value) })}
+              value={formData.day_number}
+              onChange={e => setFormData({ ...formData, day_number: parseInt(e.target.value) })}
               className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
             >
               <option value={1}>Day 1</option>
@@ -470,8 +594,8 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
           <div className="space-y-1">
             <label className="text-xs font-medium text-zinc-500">Muscle Group</label>
             <select 
-              value={newExercise.muscle_group}
-              onChange={e => setNewExercise({ ...newExercise, muscle_group: e.target.value })}
+              value={formData.muscle_group}
+              onChange={e => setFormData({ ...formData, muscle_group: e.target.value })}
               className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
             >
               {muscleGroups.map(mg => <option key={mg} value={mg}>{mg}</option>)}
@@ -482,8 +606,8 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
             <input 
               type="text"
               placeholder="e.g. Bench Press"
-              value={newExercise.exercise_name}
-              onChange={e => setNewExercise({ ...newExercise, exercise_name: e.target.value })}
+              value={formData.exercise_name}
+              onChange={e => setFormData({ ...formData, exercise_name: e.target.value })}
               className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
             />
           </div>
@@ -491,8 +615,8 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
             <label className="text-xs font-medium text-zinc-500">Target Sets</label>
             <input 
               type="number"
-              value={newExercise.target_sets}
-              onChange={e => setNewExercise({ ...newExercise, target_sets: parseInt(e.target.value) })}
+              value={formData.target_sets}
+              onChange={e => setFormData({ ...formData, target_sets: parseInt(e.target.value) })}
               className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
             />
           </div>
@@ -501,8 +625,8 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
             <input 
               type="text"
               placeholder="e.g. 8-12"
-              value={newExercise.target_reps}
-              onChange={e => setNewExercise({ ...newExercise, target_reps: e.target.value })}
+              value={formData.target_reps}
+              onChange={e => setFormData({ ...formData, target_reps: e.target.value })}
               className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
             />
           </div>
@@ -510,18 +634,29 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
             <label className="text-xs font-medium text-zinc-500">Exercise Notes (Optional)</label>
             <textarea 
               placeholder="e.g. Focus on slow eccentric, use barbell"
-              value={newExercise.notes}
-              onChange={e => setNewExercise({ ...newExercise, notes: e.target.value })}
+              value={formData.notes}
+              onChange={e => setFormData({ ...formData, notes: e.target.value })}
               className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10 min-h-[60px]"
             />
           </div>
         </div>
-        <button 
-          type="submit"
-          className="w-full bg-zinc-900 text-white font-semibold py-2.5 rounded-xl hover:bg-zinc-800 transition-colors"
-        >
-          Add to Schedule
-        </button>
+        <div className="flex gap-3">
+          <button 
+            type="submit"
+            className="flex-1 bg-zinc-900 text-white font-semibold py-2.5 rounded-xl hover:bg-zinc-800 transition-colors"
+          >
+            {editingId ? 'Update Exercise' : 'Add to Schedule'}
+          </button>
+          {editingId && (
+            <button 
+              type="button"
+              onClick={handleCancel}
+              className="px-6 bg-zinc-100 text-zinc-600 font-semibold py-2.5 rounded-xl hover:bg-zinc-200 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
 
       <div className="grid gap-6">
@@ -539,12 +674,22 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
                     <p className="text-xs text-zinc-500">{exercise.target_sets} sets • {exercise.target_reps} reps</p>
                     {exercise.notes && <p className="text-[10px] text-zinc-400 mt-1 italic">Note: {exercise.notes}</p>}
                   </div>
-                  <button 
-                    onClick={() => onDelete(exercise.id)}
-                    className="p-2 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={() => handleEdit(exercise)}
+                      className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+                      title="Edit Exercise"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={() => onDelete(exercise.id)}
+                      className="p-2 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Delete Exercise"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
               {schedule.filter(e => e.day_number === dayNum).length === 0 && (
@@ -558,7 +703,7 @@ function ScheduleView({ schedule, onAdd, onDelete }: { schedule: Exercise[], onA
   );
 }
 
-function HistoryView({ logs }: { logs: TrainingLog[] }) {
+function HistoryView({ logs, onUpdateLog, onDeleteLog }: { logs: TrainingLog[], onUpdateLog: (log: TrainingLog) => void, onDeleteLog: (id: number) => void }) {
   const groupedLogs = logs.reduce((acc, log) => {
     const date = format(new Date(log.timestamp), 'yyyy-MM-dd');
     if (!acc[date]) acc[date] = [];
@@ -586,33 +731,7 @@ function HistoryView({ logs }: { logs: TrainingLog[] }) {
 
             <div className="grid gap-3">
               {dayLogs.map(log => (
-                <div key={log.id} className="space-y-2">
-                  <div className="bg-white p-4 rounded-2xl border border-zinc-200 flex items-center justify-between shadow-sm">
-                    <div className="flex items-center gap-4">
-                      <div className="bg-zinc-100 p-2 rounded-lg">
-                        <Clock className="w-4 h-4 text-zinc-500" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium">{log.exercise_name}</p>
-                          {log.muscle_group && <span className="px-1.5 py-0.5 bg-zinc-100 rounded text-zinc-500 font-bold uppercase text-[9px]">{log.muscle_group}</span>}
-                        </div>
-                        <p className="text-xs text-zinc-500">
-                          Day {log.day_number} • {format(new Date(log.timestamp), 'h:mm a')}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-bold text-lg">{log.weight}<span className="text-xs font-normal text-zinc-400 ml-1">kg</span></p>
-                      <p className="text-xs text-zinc-500">{log.sets} × {log.reps}</p>
-                    </div>
-                  </div>
-                  {log.notes && (
-                    <div className="px-4 py-2 bg-zinc-50 rounded-xl border border-zinc-100 text-xs text-zinc-600 italic">
-                      "{log.notes}"
-                    </div>
-                  )}
-                </div>
+                <HistoryLogCard key={log.id} log={log} onUpdate={onUpdateLog} onDelete={onDeleteLog} />
               ))}
             </div>
           </div>
@@ -626,6 +745,147 @@ function HistoryView({ logs }: { logs: TrainingLog[] }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function HistoryLogCard({ log, onUpdate, onDelete }: { log: TrainingLog, onUpdate: (log: TrainingLog) => void, onDelete: (id: number) => void, key?: any }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [weight, setWeight] = useState(log.weight.toString());
+  const [sets, setSets] = useState(log.sets.toString());
+  const [reps, setReps] = useState(log.reps.toString());
+  const [notes, setNotes] = useState(log.notes || '');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onUpdate({
+      ...log,
+      weight: parseFloat(weight) || 0,
+      sets: parseInt(sets) || 0,
+      reps: parseInt(reps) || 0,
+      notes: notes
+    });
+    setIsEditing(false);
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="bg-white p-4 rounded-2xl border border-zinc-200 flex items-center justify-between shadow-sm relative group">
+        {!isEditing && (
+          <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {showConfirmDelete ? (
+              <div className="flex items-center gap-1 bg-red-50 p-1 rounded-lg border border-red-100 animate-in fade-in zoom-in duration-200">
+                <span className="text-[10px] font-bold text-red-600 px-1">Delete?</span>
+                <button 
+                  onClick={() => onDelete(log.id)}
+                  className="p-1 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                </button>
+                <button 
+                  onClick={() => setShowConfirmDelete(false)}
+                  className="p-1 bg-zinc-200 text-zinc-600 rounded hover:bg-zinc-300 transition-colors"
+                >
+                  <Plus className="w-3 h-3 rotate-45" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <button 
+                  onClick={() => setIsEditing(true)}
+                  className="p-1.5 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+                  title="Edit Log"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button 
+                  onClick={() => setShowConfirmDelete(true)}
+                  className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                  title="Delete Log"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        
+        <div className="flex items-center gap-4">
+          <div className="bg-zinc-100 p-2 rounded-lg">
+            <Clock className="w-4 h-4 text-zinc-500" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="font-medium">{log.exercise_name}</p>
+              {log.muscle_group && <span className="px-1.5 py-0.5 bg-zinc-100 rounded text-zinc-500 font-bold uppercase text-[9px]">{log.muscle_group}</span>}
+            </div>
+            <p className="text-xs text-zinc-500">
+              Day {log.day_number} • {format(new Date(log.timestamp), 'h:mm a')}
+            </p>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="font-bold text-lg">{log.weight}<span className="text-xs font-normal text-zinc-400 ml-1">kg</span></p>
+          <p className="text-xs text-zinc-500">{log.sets} × {log.reps}</p>
+        </div>
+      </div>
+
+      {isEditing && (
+        <motion.form 
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          className="p-4 bg-zinc-50 border border-zinc-200 rounded-2xl grid grid-cols-3 gap-3"
+          onSubmit={handleSubmit}
+        >
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-zinc-400">Weight (kg)</label>
+            <input 
+              type="number" 
+              step="0.5"
+              value={weight}
+              onChange={e => setWeight(e.target.value)}
+              className="w-full bg-white border border-zinc-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-zinc-400">Sets</label>
+            <input 
+              type="number" 
+              value={sets}
+              onChange={e => setSets(e.target.value)}
+              className="w-full bg-white border border-zinc-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-zinc-400">Reps</label>
+            <input 
+              type="number" 
+              value={reps}
+              onChange={e => setReps(e.target.value)}
+              className="w-full bg-white border border-zinc-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+            />
+          </div>
+          <div className="col-span-3 space-y-1">
+            <label className="text-[10px] uppercase font-bold text-zinc-400">Notes</label>
+            <textarea 
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              className="w-full bg-white border border-zinc-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900/10 min-h-[60px]"
+            />
+          </div>
+          <div className="col-span-3 flex gap-2">
+            <button type="submit" className="flex-1 bg-zinc-900 text-white text-xs font-semibold py-2 rounded-lg">Save</button>
+            <button type="button" onClick={() => setIsEditing(false)} className="px-4 text-xs font-semibold text-zinc-500">Cancel</button>
+          </div>
+        </motion.form>
+      )}
+
+      {log.notes && !isEditing && (
+        <div className="px-4 py-2 bg-zinc-50 rounded-xl border border-zinc-100 text-xs text-zinc-600 italic">
+          "{log.notes}"
+        </div>
+      )}
     </div>
   );
 }
@@ -895,8 +1155,8 @@ function CalendarView({ logs }: { logs: TrainingLog[] }) {
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(monthStart);
-  const startDate = startOfWeek(monthStart);
-  const endDate = endOfWeek(monthEnd);
+  const startDate = startOfWeek(monthStart, { weekStartsOn: 1 });
+  const endDate = endOfWeek(monthEnd, { weekStartsOn: 1 });
 
   const calendarDays = eachDayOfInterval({
     start: startDate,
@@ -942,7 +1202,7 @@ function CalendarView({ logs }: { logs: TrainingLog[] }) {
 
       <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
         <div className="grid grid-cols-7 border-b border-zinc-100 bg-zinc-50/50">
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
             <div key={day} className="py-3 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-400">
               {day}
             </div>
