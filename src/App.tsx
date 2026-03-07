@@ -278,7 +278,7 @@ export default function App() {
               transition={{ duration: 0.2 }}
             >
               {view === 'tracker' && (
-                <TrackerView schedule={schedule} logs={logs} onLog={logWorkout} onUpdateLog={updateLog} />
+                <TrackerView schedule={schedule} logs={logs} onLog={logWorkout} onUpdateLog={updateLog} onUpdateExercise={updateExercise} />
               )}
               {view === 'schedule' && (
                 <ScheduleView schedule={schedule} onAdd={addExercise} onUpdate={updateExercise} onDelete={deleteExercise} />
@@ -320,7 +320,7 @@ function NavButton({ active, onClick, icon, label }: { active: boolean, onClick:
 
 // --- View Components ---
 
-function TrackerView({ schedule, logs, onLog, onUpdateLog }: { schedule: Exercise[], logs: TrainingLog[], onLog: (log: any) => void, onUpdateLog: (log: TrainingLog) => void }) {
+function TrackerView({ schedule, logs, onLog, onUpdateLog, onUpdateExercise }: { schedule: Exercise[], logs: TrainingLog[], onLog: (log: any) => void, onUpdateLog: (log: TrainingLog) => void, onUpdateExercise: (exercise: Exercise) => void }) {
   const currentWeekLogs = logs.filter(log => isSameWeek(new Date(log.timestamp), new Date(), { weekStartsOn: 1 }));
   
   const days = [1, 2, 3, 4];
@@ -380,6 +380,7 @@ function TrackerView({ schedule, logs, onLog, onUpdateLog }: { schedule: Exercis
                         currentLog={currentLog} 
                         onLog={onLog} 
                         onUpdateLog={onUpdateLog}
+                        onUpdateExercise={onUpdateExercise}
                       />
                     );
                   })}
@@ -393,14 +394,20 @@ function TrackerView({ schedule, logs, onLog, onUpdateLog }: { schedule: Exercis
   );
 }
 
-function ExerciseCard({ exercise, currentLog, onLog, onUpdateLog }: { exercise: Exercise, currentLog?: TrainingLog, onLog: (log: any) => void, onUpdateLog: (log: TrainingLog) => void, key?: any }) {
+function ExerciseCard({ exercise, currentLog, onLog, onUpdateLog, onUpdateExercise }: { exercise: Exercise, currentLog?: TrainingLog, onLog: (log: any) => void, onUpdateLog: (log: TrainingLog) => void, onUpdateExercise: (exercise: Exercise) => void, key?: any }) {
   const [isLogging, setIsLogging] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [newName, setNewName] = useState(exercise.exercise_name);
   const [weight, setWeight] = useState(currentLog ? currentLog.weight.toString() : '');
   const [sets, setSets] = useState(currentLog ? currentLog.sets.toString() : exercise.target_sets.toString());
   const [reps, setReps] = useState(currentLog ? currentLog.reps.toString() : '');
   const [notes, setNotes] = useState(currentLog ? currentLog.notes || '' : '');
 
   const isDone = !!currentLog;
+
+  useEffect(() => {
+    setNewName(exercise.exercise_name);
+  }, [exercise.exercise_name]);
 
   useEffect(() => {
     if (currentLog) {
@@ -410,6 +417,13 @@ function ExerciseCard({ exercise, currentLog, onLog, onUpdateLog }: { exercise: 
       setNotes(currentLog.notes || '');
     }
   }, [currentLog]);
+
+  const handleNameSubmit = () => {
+    if (newName.trim() && newName !== exercise.exercise_name) {
+      onUpdateExercise({ ...exercise, exercise_name: newName.trim() });
+    }
+    setIsEditingName(false);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -448,15 +462,41 @@ function ExerciseCard({ exercise, currentLog, onLog, onUpdateLog }: { exercise: 
       )}
 
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
           {isDone ? (
-            <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+            <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
           ) : (
-            <div className="w-5 h-5 rounded-full border-2 border-zinc-200" />
+            <div className="w-5 h-5 rounded-full border-2 border-zinc-200 flex-shrink-0" />
           )}
-          <div>
-            <h4 className={cn("font-medium", isDone && "text-emerald-900")}>{exercise.exercise_name}</h4>
-            <p className="text-xs text-zinc-500">
+          <div className="flex-1 min-w-0">
+            {isEditingName ? (
+              <div className="flex items-center gap-2">
+                <input 
+                  autoFocus
+                  type="text"
+                  value={newName}
+                  onChange={e => setNewName(e.target.value)}
+                  onBlur={handleNameSubmit}
+                  onKeyDown={e => e.key === 'Enter' && handleNameSubmit()}
+                  className="w-full bg-zinc-50 border border-zinc-200 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 group/name">
+                <h4 className={cn("font-medium truncate", isDone && "text-emerald-900")}>
+                  {exercise.exercise_name}
+                </h4>
+                {!isDone && (
+                  <button 
+                    onClick={() => setIsEditingName(true)}
+                    className="opacity-0 group-hover/name:opacity-100 p-1 text-zinc-400 hover:text-zinc-900 transition-opacity"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-zinc-500 truncate">
               {exercise.muscle_group && <span className="mr-2 px-1.5 py-0.5 bg-zinc-100 rounded text-zinc-600 font-bold uppercase text-[9px]">{exercise.muscle_group}</span>}
               {exercise.target_sets} sets • {exercise.target_reps} reps
             </p>
